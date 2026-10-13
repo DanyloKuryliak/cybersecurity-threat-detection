@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CTU-13 Local Alert Review</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0a1220; color: #e7edf5; }
+    body { max-width: 1100px; margin: auto; padding: 32px 20px; }
+    h1 { margin: 0 0 8px; }
+    p { color: #adbed2; line-height: 1.5; }
+    a { color: #69d9bd; }
+    .eyebrow { color: #69d9bd; text-transform: uppercase; letter-spacing: .12em; font-size: .8rem; font-weight: bold; }
+    .notice { border-left: 3px solid #69d9bd; padding: 12px 16px; background: #15263b; }
+    .panel { background: #111e31; border: 1px solid #28405b; border-radius: 12px; padding: 18px; margin-top: 20px; }
+    form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+    label { display: grid; gap: 6px; color: #adbed2; font-size: .85rem; }
+    input, select, textarea, button { font: inherit; color: #e7edf5; background: #15263b; border: 1px solid #4c6987; border-radius: 6px; padding: 9px; }
+    button { cursor: pointer; background: #135b55; border-color: #69d9bd; }
+    button:hover, button:focus-visible { background: #19766e; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; min-width: 730px; }
+    th, td { padding: 10px; text-align: left; border-bottom: 1px solid #28405b; font-variant-numeric: tabular-nums; }
+    th { color: #adbed2; font-size: .8rem; }
+    .botnet { color: #ffbd78; }
+    .hidden { display: none; }
+    .details { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 8px; }
+    textarea { min-width: min(100%, 320px); min-height: 72px; }
+  </style>
+</head>
+<body>
+  <div class="eyebrow">Local research workflow · CTU-13</div>
+  <h1>Alert review</h1>
+  <p class="notice">This queue uses historical labeled traffic. Host names are aliases. The known label is shown for research and is not an analyst decision. This local service has no login and must stay on your computer.</p>
+  <p><a href="/research">View model results</a> · <a href="https://www.stratosphereips.org/datasets-ctu13">Dataset source</a></p>
+  <main>
+    <section class="panel" aria-label="Alert filters">
+      <form id="filters">
+        <label>Capture <select name="capture"><option value="">All</option><option value="52">52</option><option value="53">53</option></select></label>
+        <label>Host alias <input name="host" placeholder="host-01" maxlength="32"></label>
+        <label>Review <select name="status"><option value="">All</option><option value="unreviewed">Unreviewed</option><option value="benign">Benign</option><option value="suspicious">Suspicious</option><option value="needs_more_data">Needs more data</option></select></label>
+        <button type="submit">Search</button>
+      </form>
+    </section>
+    <section class="panel">
+      <h2>Alerts</h2>
+      <p id="queue-status" role="status">Loading…</p>
+      <div class="table-wrap"><table><thead><tr><th scope="col">Capture</th><th scope="col">Minute</th><th scope="col">Host</th><th scope="col">Score</th><th scope="col">Flows</th><th scope="col">Known label</th><th scope="col">Review</th><th scope="col">Details</th></tr></thead><tbody id="queue"></tbody></table></div>
+      <button id="next" type="button" class="hidden">Next page</button>
+    </section>
+    <section id="detail" class="panel hidden" aria-label="Alert details">
+      <h2>Alert details</h2>
+      <div id="evidence" class="details"></div>
+      <form id="review-form">
+        <label>Decision <select name="status"><option value="benign">Benign</option><option value="suspicious">Suspicious</option><option value="needs_more_data">Needs more data</option></select></label>
+        <label>Note <textarea name="note" maxlength="500" required></textarea></label>
+        <button type="submit">Save review</button>
+      </form>
+      <p id="review-status" role="status"></p>
+    </section>
+  </main>
+  <script>
+    const filters = document.getElementById('filters');
+    const queue = document.getElementById('queue');
+    const next = document.getElementById('next');
+    let cursor = 0, selected = null;
+    async function request(url, options) {
+      const response = await fetch(url, options);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || `Request failed: ${response.status}`);
+      return data;
+    }
+    async function load() {
+      const values = new FormData(filters);
+      const params = new URLSearchParams({cursor: String(cursor), limit: '25'});
+      for (const key of ['capture', 'host', 'status']) if (values.get(key)) params.set(key, values.get(key).trim());
+      try {
+        const page = await request(`/v1/alerts?${params}`);
+        queue.replaceChildren();
+        document.getElementById('queue-status').textContent = `${page.total} matching alerts. Showing ${page.items.length ? cursor + 1 : 0}–${cursor + page.items.length}.`;
+        for (const alert of page.items) {
+          const row = document.createElement('tr');
+          for (const value of [alert.capture, alert.minute, alert.host, alert.score.toFixed(4), alert.flow_count, alert.known_label ? 'Botnet' : 'Normal', alert.review.status]) {
+            const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+          }
+          if (alert.known_label) row.children[5].className = 'botnet';
+          const cell = document.createElement('td'), button = document.createElement('button');
+          button.type = 'button'; button.textContent = 'Inspect';
+          button.addEventListener('click', () => inspect(alert.alert_id));
+          cell.append(button); row.append(cell); queue.append(row);
+        }
+        next.classList.toggle('hidden', page.next_cursor === null);
+        next.dataset.cursor = page.next_cursor ?? '';
+      } catch (error) { document.getElementById('queue-status').textContent = error.message; }
+    }
+    async function inspect(id) {
+      try {
+        selected = await request(`/v1/alerts/${encodeURIComponent(id)}`);
+        const evidence = document.getElementById('evidence'); evidence.replaceChildren();
+        for (const [name, value] of Object.entries({Capture:selected.capture, Minute:selected.minute, Host:selected.host, 'Anomaly score':selected.score, Flows:selected.flow_count, 'ICMP flows':selected.icmp_flows, 'Total bytes':selected.total_bytes.toLocaleString(), 'Known label':selected.known_label ? 'Botnet' : 'Normal', 'Current review':selected.review.status})) {
+          const item = document.createElement('p'); item.textContent = `${name}: ${value}`; evidence.append(item);
+        }
+        document.querySelector('#review-form [name=note]').value = selected.review.note;
+        document.getElementById('review-status').textContent = '';
+        document.getElementById('detail').classList.remove('hidden');
+        document.getElementById('detail').scrollIntoView({behavior:'smooth'});
+      } catch (error) { document.getElementById('queue-status').textContent = error.message; }
+    }
+    filters.addEventListener('submit', event => { event.preventDefault(); cursor = 0; load(); });
+    next.addEventListener('click', () => { cursor = Number(next.dataset.cursor); load(); });
+    document.getElementById('review-form').addEventListener('submit', async event => {
+      event.preventDefault(); if (!selected) return;
+      const values = new FormData(event.currentTarget);
+      try {
+        const saved = await request(`/v1/alerts/${encodeURIComponent(selected.alert_id)}/review`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({status:values.get('status'), note:values.get('note'), version:selected.review.version})
+        });
+        selected.review = saved;
+        document.getElementById('review-status').textContent = `Saved as ${saved.status}.`;
+        load();
+      } catch (error) { document.getElementById('review-status').textContent = error.message; }
+    });
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_DB: threat_detection
+      CLICKHOUSE_USER: ctu
+      CLICKHOUSE_PASSWORD: ${CTU_DB_PASSWORD:?Set CTU_DB_PASSWORD in .env}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user \"$$CLICKHOUSE_USER\" --password \"$$CLICKHOUSE_PASSWORD\" --query 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  loader:
+    build: .
+    command: ["threat-ctu13-load"]
+    environment:
+      CTU_DB_HOST: clickhouse
+      CTU_DB_PASSWORD: ${CTU_DB_PASSWORD:?Set CTU_DB_PASSWORD in .env}
+    volumes:
+      - ./artifacts/ctu13:/app/artifacts/ctu13:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  api:
+    build: .
+    environment:
+      CTU_DB_HOST: clickhouse
+      CTU_DB_PASSWORD: ${CTU_DB_PASSWORD:?Set CTU_DB_PASSWORD in .env}
+      CTU_REVIEW_DB: /state/reviews.sqlite3
+    volumes:
+      - ./artifacts/ctu13:/app/artifacts/ctu13:ro
+      - review_state:/state
+    ports:
+      - "127.0.0.1:8765:8765"
+    depends_on:
+      loader:
+        condition: service_completed_successfully
+
+  research:
+    profiles: ["research"]
+    build:
+      context: .
+      args:
+        UV_EXTRA: research
+    volumes:
+      - ./data:/app/data:ro
+      - ./artifacts:/app/artifacts
+    command: ["threat-ctu13-backfill"]
+
+volumes:
+  clickhouse_data:
+  review_state:

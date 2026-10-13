@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CTU-13 | Cross-capture detection pilot</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0a1220; color: #e7edf5; }
+    body { max-width: 1080px; margin: auto; padding: 32px 20px; }
+    h1 { margin: 0 0 8px; font-size: clamp(1.8rem, 4vw, 2.8rem); }
+    p { color: #adbed2; line-height: 1.5; }
+    .eyebrow { color: #69d9bd; text-transform: uppercase; letter-spacing: .12em; font-size: .8rem; font-weight: bold; }
+    .notice { border-left: 3px solid #69d9bd; padding: 12px 16px; background: #15263b; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 26px 0; }
+    .card, .panel { background: #111e31; border: 1px solid #28405b; border-radius: 12px; padding: 18px; }
+    .card span { color: #adbed2; font-size: .85rem; }
+    .card strong { display: block; font-size: 1.7rem; margin-top: 8px; }
+    .panel { margin-top: 20px; overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; min-width: 760px; }
+    th, td { padding: 11px; text-align: left; border-bottom: 1px solid #28405b; font-variant-numeric: tabular-nums; }
+    th { color: #adbed2; font-size: .8rem; }
+    .botnet { color: #ffbd78; }
+    footer { margin-top: 24px; font-size: .85rem; color: #adbed2; }
+    a { color: #69d9bd; }
+  </style>
+</head>
+<body>
+  <div class="eyebrow">Local research result · CTU-13</div>
+  <h1>Can a model spot a different botnet capture?</h1>
+  <p>Train on known-normal flows from capture 46. Choose an alert cutoff using capture 48. Check later captures 52 and 53.</p>
+  <p class="notice">These are historical university network captures with controlled botnet activity. Results apply only to the labeled subset of four short 2011 captures. An alert is a lead for review, not a confirmed incident.</p>
+  <main>
+    <section class="cards" aria-label="Evaluation summary">
+      <div class="card"><span>Validation botnet windows found</span><strong id="validation">—</strong></div>
+      <div class="card"><span>Test botnet windows found</span><strong id="test">—</strong></div>
+      <div class="card"><span>Test alerts for review</span><strong id="alerts">—</strong></div>
+      <div class="card"><span>Later capture 53 botnet windows found</span><strong id="holdout">—</strong></div>
+      <div class="card"><span>Later capture 53 alerts</span><strong id="holdout-alerts">—</strong></div>
+    </section>
+    <section class="panel">
+      <h2>What the result means</h2>
+      <p id="interpretation">Loading local report…</p>
+      <p>The model ranks each host-minute using only flow measurements. Labels are joined afterward to evaluate the ranking. Unknown Background and To-Botnet flows are excluded from this pilot.</p>
+    </section>
+    <section class="panel">
+      <h2>Alert queue</h2>
+      <p>Host aliases hide original IP addresses in this report. “Known label” is benchmark truth shown only for research.</p>
+      <label for="capture">Capture</label> <select id="capture"><option value="test">52</option><option value="holdout">53</option></select>
+      <table>
+        <thead><tr><th scope="col">Capture-local minute</th><th scope="col">Host</th><th scope="col">Score</th><th scope="col">Flows</th><th scope="col">ICMP flows</th><th scope="col">Total bytes</th><th scope="col">Known label</th></tr></thead>
+        <tbody id="queue"><tr><td colspan="7">Loading…</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+  <footer>Source: <a href="https://www.stratosphereips.org/datasets-ctu13">Stratosphere Laboratory CTU-13</a>, Garcia et al., Computers &amp; Security 45 (2014), 100–123. Raw files stay local.</footer>
+  <script>
+    fetch('report.json').then(response => {
+      if (!response.ok) throw new Error('Local report unavailable');
+      return response.json();
+    }).then(report => {
+      const val = report.validation, test = report.test, holdout = report.holdout;
+      document.getElementById('validation').textContent = `${val.botnet_windows_alerted} / ${val.botnet_windows}`;
+      document.getElementById('test').textContent = `${test.botnet_windows_alerted} / ${test.botnet_windows}`;
+      document.getElementById('alerts').textContent = test.alerts;
+      document.getElementById('holdout').textContent = `${holdout.botnet_windows_alerted} / ${holdout.botnet_windows}`;
+      document.getElementById('holdout-alerts').textContent = holdout.alerts;
+      document.getElementById('interpretation').textContent = `The same cutoff raised ${val.alerts} alerts in validation, ${test.alerts} in capture 52, and ${holdout.alerts} in capture 53. Limiting capture 53 to its top 5% would give ${report.fixed_budget.holdout.alerts} alerts and find ${report.fixed_budget.holdout.botnet_windows_alerted} botnet windows. That limit can only be applied after seeing the full capture. Review load changes sharply, so this model is not ready for operational use.`;
+      function showQueue() {
+        const queue = document.getElementById('queue');
+        const alerts = document.getElementById('capture').value === 'holdout' ? report.holdout_alerts : report.alerts;
+        queue.replaceChildren();
+        for (const alert of alerts) {
+          const row = document.createElement('tr');
+          for (const value of [alert.minute, alert.source, alert.score, alert.flow_count, alert.icmp_flows, alert.total_bytes.toLocaleString(), alert.botnet ? 'Botnet' : 'Normal']) {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            row.append(cell);
+          }
+          if (alert.botnet) row.lastChild.className = 'botnet';
+          queue.append(row);
+        }
+        if (!alerts.length) queue.textContent = 'No alerts crossed the threshold.';
+      }
+      document.getElementById('capture').addEventListener('change', showQueue);
+      showQueue();
+    }).catch(error => { document.getElementById('interpretation').textContent = error.message + '. Run threat-ctu13-evaluate and serve artifacts/ctu13.'; });
+  </script>
+</body>
+</html>
